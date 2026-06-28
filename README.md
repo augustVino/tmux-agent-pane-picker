@@ -21,24 +21,24 @@ prefix+<list_key> → display-popup pane-picker.sh → prune-dead 清幽灵
                                         → 选中：select-pane → select-window → switch-client 三层跳转
 ```
 
-| 脚本 | 职责 |
-|------|------|
-| `scripts/helpers.sh` | 公共函数：`get_tmux_option` / `tmux_dir` / `agent_processes` / `state_field`（各脚本 source 复用）|
-| `scripts/state.sh` | agent 的 hooks 调用，把状态写到当前 pane（`-p -t "$TMUX_PANE"`）|
-| `scripts/pane-picker.sh` | popup 内的 fzf 选择器：枚举 + 着色排序 + 预览 + 三层跳转 |
-| `scripts/prune-dead.sh` | 活性检测：展示前遍历每个有状态 pane 的 shell 子孙树找 agent，找不到则清状态（清幽灵）|
-| `agent-pane-picker.tmux` | tpm / `run-shell` 入口：设 `@agent_plugin_dir`、option 默认值、装 `bind-key` |
+| 脚本                     | 职责                                                                                               |
+| ------------------------ | -------------------------------------------------------------------------------------------------- |
+| `scripts/helpers.sh`     | 公共函数：`get_tmux_option` / `tmux_dir` / `agent_processes` / `state_field`（各脚本 source 复用） |
+| `scripts/state.sh`       | agent 的 hooks 调用，把状态写到当前 pane（`-p -t "$TMUX_PANE"`）                                   |
+| `scripts/pane-picker.sh` | popup 内的 fzf 选择器：枚举 + 着色排序 + 预览 + 三层跳转                                           |
+| `scripts/prune-dead.sh`  | 活性检测：展示前遍历每个有状态 pane 的 shell 子孙树找 agent，找不到则清状态（清幽灵）              |
+| `agent-pane-picker.tmux` | tpm / `run-shell` 入口：设 `@agent_plugin_dir`、option 默认值、装 `bind-key`                       |
 
 **为什么是 pane 级而非 session 级**：一个 session 里可能有多个 pane 各跑一个 agent；session 级状态会「最后一写覆盖」，状态失真。pane 级让每个 agent 的状态独立，且 pane 关闭时状态自动随 pane 消失，无脏数据。
 
 ## 接入要求
 
-| 依赖 | 版本 | 用途 |
-|------|------|------|
-| tmux | ≥ 3.2 | `display-popup`（3.2 引入）；pane option `set-option -p`（3.0 引入）|
-| fzf | 任意 | picker UI |
-| jq | 任意 | `state.sh` 解析 hook stdin；缺失则降级（不报错，沿用参数）|
-| bash | ≥ 3.2 | 四个脚本 + 入口（state/pane-picker/prune-dead/helpers；macOS 自带 3.2 已兼容）|
+| 依赖 | 版本  | 用途                                                                           |
+| ---- | ----- | ------------------------------------------------------------------------------ |
+| tmux | ≥ 3.2 | `display-popup`（3.2 引入）；pane option `set-option -p`（3.0 引入）           |
+| fzf  | 任意  | picker UI                                                                      |
+| jq   | 任意  | `state.sh` 解析 hook stdin；缺失则降级（不报错，沿用参数）                     |
+| bash | ≥ 3.2 | 四个脚本 + 入口（state/pane-picker/prune-dead/helpers；macOS 自带 3.2 已兼容） |
 
 平台：macOS、Linux。
 
@@ -80,12 +80,12 @@ d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n "$d" ] && "$d/scri
 
 ### 状态机
 
-| 状态 | 含义 | 颜色 / 排序 |
-|------|------|------------|
-| `waiting` | 等你授权 / 回答 | 🟡 黄，rank 0（浮顶）|
-| `idle` | 一轮结束，待命 | 🟢 绿，rank 1 |
-| `working` | 正在忙 | 🔴 红，rank 2（agent 区）|
-| （无）| 普通 shell pane | ⚪ 灰，rank 3（无状态，沉底）|
+| 状态      | 含义            | 颜色 / 排序                   |
+| --------- | --------------- | ----------------------------- |
+| `waiting` | 等你授权 / 回答 | 🟡 黄，rank 0（浮顶）         |
+| `idle`    | 一轮结束，待命  | 🟢 绿，rank 1                 |
+| `working` | 正在忙          | 🔴 红，rank 2（agent 区）     |
+| （无）    | 普通 shell pane | ⚪ 灰，rank 3（无状态，沉底） |
 
 排序：先按状态分组 `waiting → idle → working → 普通 shell`（**有状态 agent 在前，无状态 shell 沉底**）；**同组内按 `@agent_state_at` 降序**——最近变化的最在前。需要你的、且刚发生变化的状态，浮在最上面。
 
@@ -96,19 +96,67 @@ d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n "$d" ] && "$d/scri
 ```json
 {
   "hooks": {
-    "SessionStart":     [{ "matcher": "",                  "hooks": [{ "type": "command", "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" idle || true" }] }],
-    "UserPromptSubmit": [{ "matcher": "",                  "hooks": [{ "type": "command", "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" working || true" }] }],
-    "PreToolUse":       [{ "matcher": "",                  "hooks": [{ "type": "command", "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" working || true" }] }],
-    "Notification": [
-      { "matcher": "permission_prompt", "hooks": [{ "type": "command", "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" waiting || true" }] },
-      { "matcher": "idle_prompt",       "hooks": [{ "type": "command", "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" idle || true" }] }
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" idle || true"
+          }
+        ]
+      }
     ],
-    "Stop":             [{ "matcher": "",                  "hooks": [{ "type": "command", "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" idle || true" }] }]
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" working || true"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" working || true"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" waiting || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" idle || true"
+          }
+        ]
+      }
+    ]
   }
 }
 ```
 
 > **状态机说明**：
+>
 > - `waiting`（黄）= `permission_prompt`（授权）+ `AskUserQuestion`（PreToolUse 经 state.sh stdin 分流，单 hook 串行避竞态）。
 > - `idle`（绿）= `Stop`（正常完成）+ `idle_prompt`（**兜底 ESC 中断**——官方确认 Stop 在用户中断时不触发，补 idle_prompt→idle 作回落；但文档未明确 ESC 是否触发 idle_prompt，需实测，不保证自愈）。
 > - `UserPromptSubmit`/`Stop` 不支持 matcher，配 `"matcher": ""` 被静默忽略（等价每次触发），保留与社区惯例一致。
@@ -121,11 +169,59 @@ d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n "$d" ] && "$d/scri
 ```json
 {
   "hooks": {
-    "SessionStart":      [{ "matcher": "startup|resume",   "hooks": [{ "type": "command", "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" idle || true" }] }],
-    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" working || true" }] }],
-    "PreToolUse":        [{ "matcher": "Bash|apply_patch",  "hooks": [{ "type": "command", "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" working || true" }] }],
-    "PermissionRequest": [{ "matcher": ".*",                "hooks": [{ "type": "command", "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" waiting || true" }] }],
-    "Stop":              [{ "hooks": [{ "type": "command", "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" idle || true" }] }]
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" idle || true"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" working || true"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" working || true"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" waiting || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=$(tmux show-option -gv @agent_plugin_dir 2>/dev/null); [ -n \"$d\" ] && \"$d/scripts/state.sh\" idle || true"
+          }
+        ]
+      }
+    ]
   }
 }
 ```
